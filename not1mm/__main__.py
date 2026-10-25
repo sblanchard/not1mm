@@ -157,6 +157,7 @@ class MainWindow(QtWidgets.QMainWindow):
     text_color = QColorConstants.Black
     current_palette = None
     use_esm = False
+    stop_all_pressed = False
     use_call_history = False
     esm_dict: typing.ClassVar = {}
     sandpfreq = 0
@@ -2807,6 +2808,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # generic binding
         if action is None:
             action = key_bindings.get(key_name, None)
+
+        # A second consecutive STOP_ALL (Esc) also clears the inputs
+        if action == "STOP_ALL":
+            if self.stop_all_pressed:
+                self.clearinputs()
+            self.stop_all_pressed = not self.stop_all_pressed
+        else:
+            self.stop_all_pressed = False
 
         if action:
             if action_function := getattr(not1mm.actions, action, None):
