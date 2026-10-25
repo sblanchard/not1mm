@@ -1254,6 +1254,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_focus_changed(self, focused_widget: QtWidgets.QWidget):
         """Called when text entry focus has changed."""
+        if (
+            self.contest
+            and ("CQ WW" in self.contest.name or "IARU HF" in self.contest.name)
+            and focused_widget in (self.sent, self.receive, self.other_1, self.other_2)
+            and self.callsign.text()
+        ):
+            self.contest.prefill(self)
         if self.use_esm and hasattr(self.contest, "process_esm"):
             self.contest.process_esm(self, new_focused_widget=focused_widget)
 
