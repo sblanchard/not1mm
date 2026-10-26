@@ -2430,6 +2430,29 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         return file
 
+    def get_save_filename(self, default_filename: str, file_filter: str) -> str:
+        """
+        Ask where to save an exported file.
+
+        Parameters:
+        ----------
+        default_filename: suggested path for the file
+        file_filter: Qt file filter, e.g. 'ADIF (*.adi)'
+
+        Returns:
+        -------
+        str: chosen filename, or empty string if cancelled
+        """
+
+        file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save As",
+            default_filename,
+            f"{file_filter};;Any (*.*)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        return file
+
     def recalculate_mults(self) -> None:
         """Recalculate Multipliers"""
         self.contest.recalculate_mults(self)

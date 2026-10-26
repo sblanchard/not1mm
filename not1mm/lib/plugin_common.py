@@ -95,6 +95,9 @@ def gen_adif(self, cabrillo_name: str, contest_id=""):
         + "/"
         + f"{station_callsign.replace('/', '-')}_{cabrillo_name}_{date_time}.adi"
     )
+    filename = self.get_save_filename(filename, "ADIF (*.adi *.adif)")
+    if not filename:
+        return
     log = self.database.fetch_all_contacts_asc()
     try:
         with open(filename, "w", encoding="utf-8", newline="") as file_descriptor:
@@ -545,6 +548,9 @@ def gen_edi(
     filename = (
         str(Path.home()) + "/" + f"{station_call}_{cabrillo_name}_{date_time}.edi"
     )
+    filename = self.get_save_filename(filename, "EDI (*.edi)")
+    if not filename:
+        return
 
     logger.debug("EDI output: %s", filename)
 

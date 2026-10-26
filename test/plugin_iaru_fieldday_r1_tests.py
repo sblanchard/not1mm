@@ -96,6 +96,7 @@ def test_cabrillo_formats_received_serials(kind, received_serial, expected, tmp_
             get_ops=lambda: [],
         ),
         show_message_box=lambda _message: None,
+        get_save_filename=lambda filename, _file_filter: filename,
     )
     with (
         patch.object(plugin.Path, "home", return_value=tmp_path),
