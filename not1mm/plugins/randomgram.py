@@ -55,7 +55,9 @@ def interface(self):
     self.field4.show()
     self.snt_label.setText("SNT")
     self.field1.setAccessibleName("RST Sent")
-    self.other_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "SentRG"))
+    self.other_label.setText(
+        QtWidgets.QApplication.translate("ContestPlugin", "SentRG")
+    )
     self.field3.setAccessibleName("Sent RandomGram")
     self.exch_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "RcvRG"))
     self.field4.setAccessibleName("Received RandomGram")
@@ -251,7 +253,7 @@ def populate_history_info_line(self):
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
         self.history_info.setText(
-            f"{result.get('Call', '')}, {result.get('Name', '')}, {result.get('UserText','...')}"
+            f"{result.get('Call', '')}, {result.get('Name', '')}, {result.get('UserText', '...')}"
         )
     else:
         self.history_info.setText("")
@@ -261,6 +263,6 @@ def check_call_history(self):
     """"""
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
-        self.history_info.setText(f"{result.get('UserText','')}")
+        self.history_info.setText(f"{result.get('UserText', '')}")
         if self.other_1.text() == "":
             self.other_1.setText(f"{result.get('Name', '')}")

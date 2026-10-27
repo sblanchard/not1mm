@@ -40,10 +40,8 @@ and SQLite for the database.
 
 ### Target Environment
 
-The primary target for this application is Linux. It may be able to run on other
+The primary target for this application is Linux and MacOS. It may be able to run on other
 platforms, BSD and Windows. But I don't have a way, or desire, to directly support them.
-
-I've recently purchased an M4 Mac Mini, So I can confirm it works well on the MacOS platform.
 
 ### The Why
 
@@ -69,20 +67,31 @@ generated, 'cause I'm lazy, list of those who've submitted PR's.
 
 ## Recent Changes
 
-- [2026-09-02] @mbridak Reduce callbook lookup timeout from 10 seconds to 2.
-- [2026-09-01] Add script to automate flatpak update process
-- [2026-08-31] Fix handling of SentNr and NR in EDI output; enhance bandinMHz mapping tests
-  - @mbridak Add NAC VHF contest
+- [2026-10-26] @mbridak Fix: Add is_floatable method to validate float conversion for frequency checks.
+- [2026-10-23] @mbridak Fix: Add online_score_xml to WAG plugin fixes #702
+- [2026-10-18] @mbridak Fix: update Cabrillo timestamp handling and improve location formatting
+- [2026-10-17] @mbridak Fix: Cabrillo output formatting for multiple county lines.
+- [2026-10-11] @mbridak Fix: frequency in Cabrillo QSO field.
+- [2026-10-05] @mbridak Fix: ADIF output for CQP. Fixes #695
+  - @mbridak Fix: ADIF contest name to preferred enumerated value.
+  - @mbridak Adjust CW place holder text to make it clear that it's not an actual value in the field.
+- [2026-10-02] @mbridak fix: EditContact dialog had no theme applied.
+  - @mbridak made contact edit and edit keys dialogs modal so they would appear above floating windows.
+- [2026-10-01] @mbridak fix: exclude DX from spc count. Fixes #694
+  - @mbridak Enhance exchange handling for county lines in CQP Cabrillo format
+  - @mbridak correct exchange for CQP.
+  - @mbridak Update main.py to supress 59/9 insertions for CQP.
+
 
 See [CHANGELOG.md](CHANGELOG.md) for prior changes.
 
-## Installation
+## Installation Flatpak or UV
 
 ### Via Flatpak
 
 I'm pretty sure the flatpak works now. Let me know if it doesn't.
 
-Grab the [flatpak file](https://github.com/mbridak/not1mm/raw/refs/heads/master/not1mm.flatpak).
+Go to the latest [Release](https://github.com/mbridak/not1mm/releases/latest) and grab the flatpak file.
 
 #### Install
 
@@ -117,7 +126,7 @@ For more in depth info, please see the [installation](INSTALL.md) section.
 
 ## Documentation
 
-I've nuked 90% of the README.md and moved it to a LaTeX file. So now you can get the [user manual](https://github.com/mbridak/not1mm/raw/master/not1mm.pdf) as a PDF file. I know some WILL NOT LIKE THIS. Sorry, not sorry.
+I've nuked 90% of the README.md and moved it to a LaTeX file. So now you can get the [user manual](https://github.com/mbridak/not1mm/releases/latest) as a PDF file. I know some WILL NOT LIKE THIS. Sorry, not sorry.
 
 ## Features
 
@@ -125,17 +134,17 @@ A quick feature list, See the user manual for more details.
 
 - 60+ [supported contests](Working_Contests.md)
 - Lookup, QRZ and HamQTH
-- CAT Control, rigctld, flrig, TCI
-- CW Keyer Interface, winkeyer and cwdaemon
+- CAT Control via rigctld, flrig or TCI
+- CW Keyer Interface, [SwiftKeyer](https://github.com/mbridak/SwiftKeyer) for MacOS, [pywinkeyer](https://github.com/mbridak/PyWinKeyerSerial) or cwdaemon for Linux 
 - Cluster and Bandmap
-- Rotator control, rotctld
-- [Multi Multi](Multi-Multi.md) (The super sketchy not ready for prime time)
+- Rotator control via rotctld
+- [Multi Multi](Multi-Multi.md) (Kinda sketchy, but give it a try)
 - N1MM Packet output for nodered
-- WSJT-X FT8/FT4/ETC and FLDIGI RTTY
+- WSJT-X FT8/FT4/ETC and RTTY via FLDIGI
 - ADIF and Cabrillo output.
 - And *Other Stuff*
 
 ## Known Issues
 
 - Hamlib before 4.6.3 had a problem with sending CW and changing/reading the keying speed.
-- wfview before version 2.2 has issues with frequency reporting and CW sending.
+- wfview ~~before version 2.2~~ has issues with frequency reporting and CW sending.

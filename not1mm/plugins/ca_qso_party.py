@@ -38,8 +38,20 @@ from not1mm.lib.version import __version__
 logger = logging.getLogger(__name__)
 
 ALTEREGO = None
-EXCHANGE_HINT = "State/Province (non-CA) or County (CA)"
-SOAPBOX_HINT = "California QSO Party - Exchange: serial + state/county abbreviation"
+EXCHANGE_HINT = "# State/Prov or CA County."
+SOAPBOX_HINT = """California QSO Party
+
+In CA set Sent Exchange to # and a 4 character county.
+If you're on a county line enter each separated by a '/'
+Example: # ORAN/SBER
+
+Out of CA set it to # and a 2 char State/Prov.
+
+Set Exchange macro to {EXCH}
+
+If contact being logged is on a county line,
+input each county separated by a '/'. 
+"""
 
 name = "California QSO Party"
 mode = "BOTH"  # CW SSB BOTH RTTY
@@ -201,7 +213,7 @@ def init_contest(self):
     set_tab_next(self)
     set_tab_prev(self)
     interface(self)
-    self.next_field = self.other_1
+    self.next_field = self.receive
 
 
 def interface(self):
@@ -305,11 +317,11 @@ def predupe(self):
 
 def prefill(self):
     """Fill SentNR"""
-    # serial_nr = str(self.current_sn).zfill(3)
-    # if serial_nr == "None":
-    #     serial_nr = "001"
-    # if len(self.sent.text()) == 0:
-    #     self.sent.setText(serial_nr)
+    serial_nr = str(self.current_sn).zfill(3)
+    if serial_nr == "None":
+        serial_nr = "001"
+    if len(self.sent.text()) == 0:
+        self.sent.setText(serial_nr)
 
     # exchange = self.contest_settings.get("SentExchange", "").upper()
     # if len(self.other_1.text()) == 0 and exchange:
@@ -389,7 +401,7 @@ def recalculate_mults(self):
 
 def adif(self):
     """Call the generate ADIF function"""
-    gen_adif(self, cabrillo_name, "QSO_PARTY")
+    gen_adif(self, cabrillo_name, "CA-QSO-PARTY")
 
 
 def output_cabrillo_line(line_to_output, ending, file_descriptor, file_encoding):
@@ -571,37 +583,48 @@ def cabrillo(self, file_encoding):
                         themode = "PH"
                     case "CW" | "CW-U" | "CW-L" | "CWR" | "CW-R":
                         themode = "CW"
-
-                freq = contact.get("Freq", "0") / 1000
-
-                frequency = str(round(freq)).rjust(5)
+                frequency = str(round(contact.get("Freq", "0"))).rjust(5)
 
                 loggeddate = the_date_and_time[:10]
                 loggedtime = the_date_and_time[11:13] + the_date_and_time[14:16]
 
                 sent_nr = str(contact.get("SentNr", "")).strip()
-                sent_qth = str(contact.get("Exchange1", "")).upper().strip()
 
                 recv_nr = str(contact.get("NR", "")).strip()
+
+                location = "*              "
+                if contact.get("RoverLocation", ""):
+                    location = str(contact.get("RoverLocation", "")).upper().strip()
+                elif self.contest_settings.get("SentExchange", ""):
+                    location = (
+                        str(self.contest_settings.get("SentExchange", ""))
+                        .upper()
+                        .strip("# ")
+                    )
+
+                mycountyline = location.split("/")
+                sent_qth = str(contact.get("Exchange1", "")).upper().strip()
+                countyline = sent_qth.split("/")
 
                 # In Cabrillo: our sent QTH goes in sent position,
                 # their received QTH goes in received position.
                 # The Cabrillo format is:
                 # QSO: freq mo date time my_call sent_nr sent_qth their_call recv_nr recv_qth
-                my_qth = self.contest_settings.get("SentExchange", "").upper()
 
-                output_cabrillo_line(
-                    f"QSO: {frequency} {themode} {loggeddate} {loggedtime} "
-                    f"{contact.get('StationPrefix', '').ljust(13)} "
-                    f"{sent_nr.ljust(6)} "
-                    f"{my_qth.ljust(5)} "
-                    f"{contact.get('Call', '').ljust(13)} "
-                    f"{recv_nr.ljust(6)} "
-                    f"{sent_qth.ljust(5)}",
-                    "\r\n",
-                    file_descriptor,
-                    file_encoding,
-                )
+                for _, mcl in enumerate(mycountyline):
+                    for _, the_qth in enumerate(countyline):
+                        output_cabrillo_line(
+                            f"QSO: {frequency} {themode} {loggeddate} {loggedtime} "
+                            f"{contact.get('StationPrefix', '').ljust(13)} "
+                            f"{sent_nr.ljust(6)} "
+                            f"{mcl.ljust(5)} "
+                            f"{contact.get('Call', '').ljust(13)} "
+                            f"{recv_nr.ljust(6)} "
+                            f"{the_qth.ljust(5)}",
+                            "\r\n",
+                            file_descriptor,
+                            file_encoding,
+                        )
             output_cabrillo_line("END-OF-LOG:", "\r\n", file_descriptor, file_encoding)
         self.show_message_box(f"Cabrillo saved to: {filename}")
     except OSError as exception:
@@ -669,6 +692,7 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
             if len(self.callsign.text()) < 3:
                 self.make_button_green(self.esm_dict["CQ"])
                 buttons_to_send.append(self.esm_dict["CQ"])
+                self.esm_call_sent = ""
             elif len(self.callsign.text()) > 2:
                 self.make_button_green(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["EXCH"])
@@ -680,6 +704,17 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 self.make_button_green(self.esm_dict["AGN"])
                 buttons_to_send.append(self.esm_dict["AGN"])
             else:
+                # If the operator corrected a busted callsign after the
+                # exchange was already sent, resend the corrected call
+                # ahead of the QRZ/TU macro so the other station logs the
+                # right callsign before the QSO is wiped.
+                if (
+                    self.pref.get("esm_send_corrected_call")
+                    and self.esm_call_sent
+                    and self.callsign.text() != self.esm_call_sent
+                ):
+                    self.make_button_green(self.esm_dict["HISCALL"])
+                    buttons_to_send.append(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["QRZ"])
                 buttons_to_send.append(self.esm_dict["QRZ"])
                 buttons_to_send.append("LOGIT")
@@ -689,7 +724,10 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 if button:
                     if button == "LOGIT":
                         self.save_contact()
+                        self.esm_call_sent = ""
                         continue
+                    if button == self.esm_dict.get("HISCALL"):
+                        self.esm_call_sent = self.callsign.text()
                     self.process_function_key(button)
     else:
         if self.current_widget == "callsign":

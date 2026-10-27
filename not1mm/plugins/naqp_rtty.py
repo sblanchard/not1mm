@@ -213,7 +213,7 @@ def cabrillo(self, file_encoding):
     filename = (
         str(Path.home())
         + "/"
-        + f"{self.station.get('Call', '').upper().replace('/','-')}_{cabrillo_name}_{date_time}.log"
+        + f"{self.station.get('Call', '').upper().replace('/', '-')}_{cabrillo_name}_{date_time}.log"
     )
     logger.debug("%s", filename)
     log = self.database.fetch_all_contacts_asc()
@@ -245,7 +245,7 @@ def cabrillo(self, file_encoding):
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"CALLSIGN: {self.station.get('Call','')}",
+                f"CALLSIGN: {self.station.get('Call', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -257,19 +257,19 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory','')}",
+                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory','')}",
+                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory','')}",
+                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -284,26 +284,26 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory','')}",
+                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             if self.contest_settings.get("OverlayCategory", "") != "N/A":
                 output_cabrillo_line(
-                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory','')}",
+                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory', '')}",
                     "\r\n",
                     file_descriptor,
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"GRID-LOCATOR: {self.station.get('GridSquare','')}",
+                f"GRID-LOCATOR: {self.station.get('GridSquare', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory','')}",
+                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -320,7 +320,7 @@ def cabrillo(self, file_encoding):
             for op in list_of_ops:
                 ops += f"{op.get('Operator', '')}, "
             if self.station.get("Call", "") not in ops:
-                ops += f"@{self.station.get('Call','')}"
+                ops += f"@{self.station.get('Call', '')}"
             else:
                 ops = ops.rstrip(", ")
             output_cabrillo_line(
@@ -515,7 +515,7 @@ def ft8_handler(the_packet: dict):
         ALTEREGO.contact["SNT"] = ALTEREGO.sent.text()
         ALTEREGO.contact["RCV"] = ALTEREGO.receive.text()
         ALTEREGO.other_1.setText(str(the_packet.get("NAME", "")))
-        ALTEREGO.other_2.setText(f'{the_packet.get("SRX_STRING", "")}'.strip())
+        ALTEREGO.other_2.setText(f"{the_packet.get('SRX_STRING', '')}".strip())
         ALTEREGO.contact["ZN"] = the_packet.get("CQZ", "")
         ALTEREGO.contact["Mode"] = the_packet.get("MODE", "ERR")
         ALTEREGO.contact["Freq"] = round(float(the_packet.get("FREQ", "0.0")) * 1000, 2)
@@ -577,6 +577,7 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
             if len(self.callsign.text()) < 3:
                 self.make_button_green(self.esm_dict["CQ"])
                 buttons_to_send.append(self.esm_dict["CQ"])
+                self.esm_call_sent = ""
             elif len(self.callsign.text()) > 2:
                 self.make_button_green(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["EXCH"])
@@ -595,10 +596,32 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 and self.other_2.text().isalpha()
                 and continent == "NA"
             ):
+                # If the operator corrected a busted callsign after the
+                # exchange was already sent, resend the corrected call
+                # ahead of the QRZ/TU macro so the other station logs the
+                # right callsign before the QSO is wiped.
+                if (
+                    self.pref.get("esm_send_corrected_call")
+                    and self.esm_call_sent
+                    and self.callsign.text() != self.esm_call_sent
+                ):
+                    self.make_button_green(self.esm_dict["HISCALL"])
+                    buttons_to_send.append(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["QRZ"])
                 buttons_to_send.append(self.esm_dict["QRZ"])
                 buttons_to_send.append("LOGIT")
             elif self.other_1.text().isalpha() and continent != "NA":
+                # If the operator corrected a busted callsign after the
+                # exchange was already sent, resend the corrected call
+                # ahead of the QRZ/TU macro so the other station logs the
+                # right callsign before the QSO is wiped.
+                if (
+                    self.pref.get("esm_send_corrected_call")
+                    and self.esm_call_sent
+                    and self.callsign.text() != self.esm_call_sent
+                ):
+                    self.make_button_green(self.esm_dict["HISCALL"])
+                    buttons_to_send.append(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["QRZ"])
                 buttons_to_send.append(self.esm_dict["QRZ"])
                 buttons_to_send.append("LOGIT")
@@ -612,7 +635,10 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 if button:
                     if button == "LOGIT":
                         self.save_contact()
+                        self.esm_call_sent = ""
                         continue
+                    if button == self.esm_dict.get("HISCALL"):
+                        self.esm_call_sent = self.callsign.text()
                     sendstring = f"{sendstring}{self.process_macro(button.toolTip())} "
             self.fldigi_util.send_string(sendstring)
     else:
@@ -659,7 +685,7 @@ def populate_history_info_line(self):
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
         self.history_info.setText(
-            f"{result.get('Call', '')}, {result.get('Name', '')}, {result.get('State', '')}, {result.get('UserText','...')}"
+            f"{result.get('Call', '')}, {result.get('Name', '')}, {result.get('State', '')}, {result.get('UserText', '...')}"
         )
     else:
         self.history_info.setText("")
@@ -669,7 +695,7 @@ def check_call_history(self):
     """"""
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
-        self.history_info.setText(f"{result.get('UserText','')}")
+        self.history_info.setText(f"{result.get('UserText', '')}")
         if self.other_1.text() == "":
             self.other_1.setText(f"{result.get('Name', '')}")
         if self.other_2.text() == "":

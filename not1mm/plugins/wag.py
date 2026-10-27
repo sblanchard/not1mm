@@ -33,21 +33,23 @@
 #   Upload logs at: https://dxhf2.darc.de/~waglog/upload.cgi?form=referat&lang=de
 #   Cabrillo name: WAG
 
-
 import datetime
 import logging
 import re
-
 from pathlib import Path
 
 from PyQt6 import QtWidgets
 
 from not1mm.lib.plugin_common import (
     gen_adif,
-)  # , imp_adif, get_points, online_score_xml
+    get_points,
+    online_score_xml,
+)  # , imp_adif
 from not1mm.lib.version import __version__
 
 logger = logging.getLogger(__name__)
+
+assert online_score_xml
 
 __plugin_version__ = "0.1"
 
@@ -100,9 +102,13 @@ def interface(self):
     self.field3.show()
     self.field4.show()
     self.snt_label.setText("SNT")
-    self.other_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "DOK/# Sent"))
+    self.other_label.setText(
+        QtWidgets.QApplication.translate("ContestPlugin", "DOK/# Sent")
+    )
     self.field3.setAccessibleName("RST Sent")
-    self.exch_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "DOK/# RCVD"))
+    self.exch_label.setText(
+        QtWidgets.QApplication.translate("ContestPlugin", "DOK/# RCVD")
+    )
     self.field4.setAccessibleName("DOK/NM or Number")
 
 
@@ -299,12 +305,12 @@ def cabrillo(self, file_encoding):
     logger.debug("******Cabrillo*****")
     logger.debug("Station: %s", f"{self.station}")
     logger.debug("Contest: %s", f"{self.contest_settings}")
-    now = datetime.datetime.now()
+    now = datetime.datetime.now().astimezone()
     date_time = now.strftime("%Y-%m-%d_%H-%M-%S")
     filename = (
         str(Path.home())
         + "/"
-        + f"{self.station.get('Call', '').upper().replace('/','-')}_{cabrillo_name}_{date_time}.log"
+        + f"{self.station.get('Call', '').upper().replace('/', '-')}_{cabrillo_name}_{date_time}.log"
     )
     logger.debug("%s", filename)
     log = self.database.fetch_all_contacts_asc()
@@ -336,7 +342,7 @@ def cabrillo(self, file_encoding):
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"CALLSIGN: {self.station.get('Call','')}",
+                f"CALLSIGN: {self.station.get('Call', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -348,19 +354,19 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory','')}",
+                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory','')}",
+                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory','')}",
+                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -375,26 +381,26 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory','')}",
+                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             if self.contest_settings.get("OverlayCategory", "") != "N/A":
                 output_cabrillo_line(
-                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory','')}",
+                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory', '')}",
                     "\r\n",
                     file_descriptor,
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"GRID-LOCATOR: {self.station.get('GridSquare','')}",
+                f"GRID-LOCATOR: {self.station.get('GridSquare', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory','')}",
+                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -411,7 +417,7 @@ def cabrillo(self, file_encoding):
             for op in list_of_ops:
                 ops += f"{op.get('Operator', '')}, "
             if self.station.get("Call", "") not in ops:
-                ops += f"@{self.station.get('Call','')}"
+                ops += f"@{self.station.get('Call', '')}"
             else:
                 ops = ops.rstrip(", ")
             output_cabrillo_line(
@@ -487,7 +493,7 @@ def cabrillo(self, file_encoding):
                 )
             output_cabrillo_line("END-OF-LOG:", "\r\n", file_descriptor, file_encoding)
         self.show_message_box(f"Cabrillo saved to: {filename}")
-    except IOError as exception:
+    except OSError as exception:
         logger.critical("cabrillo: IO error: %s, writing to %s", exception, filename)
         self.show_message_box(f"Error saving Cabrillo: {exception} {filename}")
         return
@@ -501,7 +507,6 @@ def recalculate_mults(self):
         return
 
     for contact in all_contacts:
-
         contact["IsMultiplier1"] = 0
 
         time_stamp = contact.get("TS", "")
@@ -608,6 +613,7 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
             if len(self.callsign.text()) < 3:
                 self.make_button_green(self.esm_dict["CQ"])
                 buttons_to_send.append(self.esm_dict["CQ"])
+                self.esm_call_sent = ""
             elif len(self.callsign.text()) > 2:
                 self.make_button_green(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["EXCH"])
@@ -619,6 +625,17 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 self.make_button_green(self.esm_dict["AGN"])
                 buttons_to_send.append(self.esm_dict["AGN"])
             else:
+                # If the operator corrected a busted callsign after the
+                # exchange was already sent, resend the corrected call
+                # ahead of the QRZ/TU macro so the other station logs the
+                # right callsign before the QSO is wiped.
+                if (
+                    self.pref.get("esm_send_corrected_call")
+                    and self.esm_call_sent
+                    and self.callsign.text() != self.esm_call_sent
+                ):
+                    self.make_button_green(self.esm_dict["HISCALL"])
+                    buttons_to_send.append(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["QRZ"])
                 buttons_to_send.append(self.esm_dict["QRZ"])
                 buttons_to_send.append("LOGIT")
@@ -628,7 +645,10 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 if button:
                     if button == "LOGIT":
                         self.save_contact()
+                        self.esm_call_sent = ""
                         continue
+                    if button == self.esm_dict.get("HISCALL"):
+                        self.esm_call_sent = self.callsign.text()
                     self.process_function_key(button)
     else:
         if self.current_widget == "callsign":
@@ -669,18 +689,11 @@ def check_call_history(self):
     """"""
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
-        self.history_info.setText(f"{result.get('UserText','')}")
+        self.history_info.setText(f"{result.get('UserText', '')}")
         if self.other_2.text() == "":
             # Strip leading whitespace for the case that historyfile is not
             # well formatted, f.e. CA0LL, DOK instead of CA0LL,DOK
             self.other_2.setText(f"{result.get('Exch1', '').lstrip()}")
-
-
-# def get_mults(self):
-#     """Get mults for RTC XML"""
-#     mults = {}
-#     mults["state"], mults["wpxprefix"] = show_mults(self, rtc=True)
-#     return mults
 
 
 def trigger_update(self):
@@ -707,3 +720,15 @@ def get_district(dok):
     if district:
         return district.group(0)
     return None
+
+
+def get_mults(self):
+    """Get mults for RTC XML"""
+    mults = {}
+    mults["country"] = show_mults(self)
+    return mults
+
+
+def just_points(self):
+    """Get points for RTC XML"""
+    return get_points(self)

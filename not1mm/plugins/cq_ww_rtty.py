@@ -40,20 +40,26 @@
 
 import datetime
 import logging
-
 from pathlib import Path
 
 from PyQt6 import QtWidgets
 
 from not1mm.lib.ham_utility import get_logged_band
-from not1mm.lib.plugin_common import gen_adif, imp_adif, get_points, online_score_xml
+from not1mm.lib.plugin_common import gen_adif, get_points, imp_adif, online_score_xml
 from not1mm.lib.version import __version__
 
 logger = logging.getLogger(__name__)
 
+assert online_score_xml
+assert imp_adif
+
 ALTEREGO = None
 
-EXCHANGE_HINT = "RST + CQ Zone + (state/VE area)"
+EXCHANGE_HINT = "CQ Zone + (state/VE area)"
+
+SOAPBOX_HINT = """If you are outside North America, In your station settings, set the ARRL Section to DX.
+
+Please make sure you set the Mode to RTTY Above."""
 
 name = "CQ WW RTTY"
 cabrillo_name = "CQ-WW-RTTY"
@@ -93,9 +99,13 @@ def interface(self):
     self.field4.show()
     self.snt_label.setText("SNT")
     self.field1.setAccessibleName("RST Sent")
-    self.other_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "CQ Zone"))
+    self.other_label.setText(
+        QtWidgets.QApplication.translate("ContestPlugin", "CQ Zone")
+    )
     self.field3.setAccessibleName("C Q Zone")
-    self.exch_label.setText(QtWidgets.QApplication.translate("ContestPlugin", "State/Prov"))
+    self.exch_label.setText(
+        QtWidgets.QApplication.translate("ContestPlugin", "State/Prov")
+    )
     self.field4.setAccessibleName("U S State or Providence")
 
 
@@ -127,11 +137,18 @@ def set_tab_prev(self):
 
 def set_contact_vars(self):
     """Contest Specific"""
+
     self.contact["SNT"] = self.sent.text()
     self.contact["RCV"] = self.receive.text()
     self.contact["ZN"] = self.other_1.text()
-    self.contact["Exchange1"] = self.other_2.text()
-    self.contact["SentNr"] = self.contest_settings.get("SentExchange", 0)
+    if self.other_2.text() == "":
+        self.contact["Exchange1"] = "DX"
+    else:
+        self.contact["Exchange1"] = self.other_2.text()
+    if " " in str(self.contest_settings.get("SentExchange", 0)):
+        self.contact["SentNr"] = self.contest_settings.get("SentExchange", 0)
+    else:
+        self.contact["SentNr"] = f"{self.contest_settings.get('SentExchange', 0)} DX"
 
 
 def predupe(self):
@@ -182,7 +199,7 @@ def show_mults(self, rtc=None):
     _zone, _country, _spc_count = 0, 0, 0
     result1 = self.database.fetch_zn_band_count()
     result2 = self.database.fetch_country_band_count()
-    res3_query = f"select count(DISTINCT(Exchange1 || ':' || Band)) as spc_count from dxlog where ContestNR = {self.database.current_contest};"
+    res3_query = f"select count(DISTINCT(Exchange1 || ':' || Band)) as spc_count from dxlog where ContestNR = {self.database.current_contest} and Exchange1 != 'DX';"
     result3 = self.database.exec_sql(res3_query)
 
     if result1:
@@ -225,7 +242,6 @@ def adif(self):
 
 
 def output_cabrillo_line(line_to_output, ending, file_descriptor, file_encoding):
-    """"""
     print(
         line_to_output.encode(file_encoding, errors="ignore").decode(),
         end=ending,
@@ -239,12 +255,12 @@ def cabrillo(self, file_encoding):
     logger.debug("******Cabrillo*****")
     logger.debug("Station: %s", f"{self.station}")
     logger.debug("Contest: %s", f"{self.contest_settings}")
-    now = datetime.datetime.now()
+    now = datetime.datetime.now().astimezone()
     date_time = now.strftime("%Y-%m-%d_%H-%M-%S")
     filename = (
         str(Path.home())
         + "/"
-        + f"{self.station.get('Call', '').upper().replace('/','-')}_{cabrillo_name}_{date_time}.log"
+        + f"{self.station.get('Call', '').upper().replace('/', '-')}_{cabrillo_name}_{date_time}.log"
     )
     logger.debug("%s", filename)
     log = self.database.fetch_all_contacts_asc()
@@ -276,7 +292,7 @@ def cabrillo(self, file_encoding):
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"CALLSIGN: {self.station.get('Call','')}",
+                f"CALLSIGN: {self.station.get('Call', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -288,19 +304,19 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory','')}",
+                f"CATEGORY-OPERATOR: {self.contest_settings.get('OperatorCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory','')}",
+                f"CATEGORY-ASSISTED: {self.contest_settings.get('AssistedCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory','')}",
+                f"CATEGORY-BAND: {self.contest_settings.get('BandCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -315,26 +331,26 @@ def cabrillo(self, file_encoding):
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory','')}",
+                f"CATEGORY-TRANSMITTER: {self.contest_settings.get('TransmitterCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             if self.contest_settings.get("OverlayCategory", "") != "N/A":
                 output_cabrillo_line(
-                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory','')}",
+                    f"CATEGORY-OVERLAY: {self.contest_settings.get('OverlayCategory', '')}",
                     "\r\n",
                     file_descriptor,
                     file_encoding,
                 )
             output_cabrillo_line(
-                f"GRID-LOCATOR: {self.station.get('GridSquare','')}",
+                f"GRID-LOCATOR: {self.station.get('GridSquare', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
             )
             output_cabrillo_line(
-                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory','')}",
+                f"CATEGORY-POWER: {self.contest_settings.get('PowerCategory', '')}",
                 "\r\n",
                 file_descriptor,
                 file_encoding,
@@ -351,7 +367,7 @@ def cabrillo(self, file_encoding):
             for op in list_of_ops:
                 ops += f"{op.get('Operator', '')}, "
             if self.station.get("Call", "") not in ops:
-                ops += f"@{self.station.get('Call','')}"
+                ops += f"@{self.station.get('Call', '')}"
             else:
                 ops = ops.rstrip(", ")
             output_cabrillo_line(
@@ -445,7 +461,7 @@ def cabrillo(self, file_encoding):
                 )
             output_cabrillo_line("END-OF-LOG:", "\r\n", file_descriptor, file_encoding)
         self.show_message_box(f"Cabrillo saved to: {filename}")
-    except IOError as exception:
+    except OSError as exception:
         logger.critical("cabrillo: IO error: %s, writing to %s", exception, filename)
         self.show_message_box(f"Error saving Cabrillo: {exception} {filename}")
         return
@@ -522,7 +538,7 @@ def ft8_handler(the_packet: dict):
         ALTEREGO.contact["Call"] = the_packet.get("CALL", "")
         ALTEREGO.contact["SNT"] = ALTEREGO.sent.text()
         ALTEREGO.contact["RCV"] = ALTEREGO.receive.text()
-        ALTEREGO.contact["Exchange1"] = f'{the_packet.get("STATE", "")}'.strip()
+        ALTEREGO.contact["Exchange1"] = f"{the_packet.get('STATE', '')}".strip()
         ALTEREGO.contact["ZN"] = the_packet.get("CQZ", "")
         ALTEREGO.contact["Mode"] = the_packet.get("MODE", "ERR")
         ALTEREGO.contact["Freq"] = round(float(the_packet.get("FREQ", "0.0")) * 1000, 2)
@@ -534,7 +550,7 @@ def ft8_handler(the_packet: dict):
         )
         logger.debug(f"{ALTEREGO.contact=}")
         ALTEREGO.other_1.setText(str(the_packet.get("CQZ", "ERR")))
-        ALTEREGO.other_2.setText(f'{the_packet.get("STATE", "")}'.strip())
+        ALTEREGO.other_2.setText(f"{the_packet.get('STATE', '')}".strip())
         ALTEREGO.save_contact()
 
 
@@ -587,6 +603,7 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
             if len(self.callsign.text()) < 3:
                 self.make_button_green(self.esm_dict["CQ"])
                 buttons_to_send.append(self.esm_dict["CQ"])
+                self.esm_call_sent = ""
             elif len(self.callsign.text()) > 2:
                 self.make_button_green(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["EXCH"])
@@ -594,10 +611,26 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 buttons_to_send.append(self.esm_dict["EXCH"])
 
         elif self.current_widget in ["other_1", "other_2"]:
-            if self.other_2.text() == "" or self.other_1.text() == "":
+            if (
+                self.contact.get("Continent", "") == "NA" and self.other_2.text() == ""
+            ) or self.other_1.text() == "":
                 self.make_button_green(self.esm_dict["AGN"])
                 buttons_to_send.append(self.esm_dict["AGN"])
-            elif self.other_1.text().isnumeric() and self.other_2.text().isalpha():
+            elif self.other_1.text().isnumeric() and (
+                self.other_2.text().isalpha()
+                or self.contact.get("Continent", "") != "NA"
+            ):
+                # If the operator corrected a busted callsign after the
+                # exchange was already sent, resend the corrected call
+                # ahead of the QRZ/TU macro so the other station logs the
+                # right callsign before the QSO is wiped.
+                if (
+                    self.pref.get("esm_send_corrected_call")
+                    and self.esm_call_sent
+                    and self.callsign.text() != self.esm_call_sent
+                ):
+                    self.make_button_green(self.esm_dict["HISCALL"])
+                    buttons_to_send.append(self.esm_dict["HISCALL"])
                 self.make_button_green(self.esm_dict["QRZ"])
                 buttons_to_send.append(self.esm_dict["QRZ"])
                 buttons_to_send.append("LOGIT")
@@ -611,7 +644,10 @@ def process_esm(self, new_focused_widget=None, with_enter=False):
                 if button:
                     if button == "LOGIT":
                         self.save_contact()
+                        self.esm_call_sent = ""
                         continue
+                    if button == self.esm_dict.get("HISCALL"):
+                        self.esm_call_sent = self.callsign.text()
                     sendstring = f"{sendstring}{self.process_macro(button.toolTip())} "
             self.fldigi_util.send_string(sendstring)
     else:
@@ -647,17 +683,16 @@ def populate_history_info_line(self):
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
         self.history_info.setText(
-            f"{result.get('Call', '')}, {result.get('CQZone', '')}, {result.get('State', '')}, {result.get('UserText','...')}"
+            f"{result.get('Call', '')}, {result.get('CQZone', '')}, {result.get('State', '')}, {result.get('UserText', '...')}"
         )
     else:
         self.history_info.setText("")
 
 
 def check_call_history(self):
-    """"""
     result = self.database.fetch_call_history(self.callsign.text())
     if result:
-        self.history_info.setText(f"{result.get('UserText','')}")
+        self.history_info.setText(f"{result.get('UserText', '')}")
         if self.other_1.text() == "":
             self.other_1.setText(f"{result.get('CQZone', '')}")
         if self.other_2.text() == "":

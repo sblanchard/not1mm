@@ -159,6 +159,10 @@ class MainWindow(QtWidgets.QMainWindow):
     use_esm = False
     use_call_history = False
     esm_dict: typing.ClassVar = {}
+    # Callsign that was last sent via the ESM "His Call" macro in Run mode,
+    # used to detect a busted-call correction so it can be resent ahead of
+    # the QRZ/TU macro. See process_esm() in the contest plugins.
+    esm_call_sent = ""
     sandpfreq = 0
     current_sn = None
     # Starts false and is set true when runtime output-device checks succeed.
@@ -1562,6 +1566,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.other_2.setPalette(lightPalette)
             self.cw_entry.setPalette(lightPalette)
 
+        edit_dialog = getattr(self.log_window, "edit_contact_dialog", None)
+        if edit_dialog is not None:
+            edit_dialog.setPalette(self.current_palette)
+            edit_dialog.apply_theme()
+
     def set_radio_icon(self, state: int) -> None:
         """
         Change CAT icon state
@@ -1825,8 +1834,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.current_palette:
             self.configuration_dialog.setPalette(self.current_palette)
         self.configuration_dialog.usehamdb_radioButton.hide()
-        self.configuration_dialog.show()
         self.configuration_dialog.accepted.connect(self.edit_configuration_return)
+        self.configuration_dialog.exec()
         self.previous_language = self.pref.get("language", "en_US")
 
     def edit_configuration_return(self) -> None:
@@ -2115,7 +2124,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.contest_dialog.dateTimeEdit.setTime(
             QtCore.QTime.fromString(the_time, "hh:mm:ss")
         )
-        self.contest_dialog.open()
+        self.contest_dialog.exec()
 
     def save_edited_contest(self) -> None:
         """
@@ -3030,11 +3039,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mults.setText(multstring)
             score = self.contest.calc_score(self)
             self.score.setText(str(score))
+            if self.n1mm and self.n1mm.send_score_packets:
+                self.n1mm.score_report["score"] = score
+                self.n1mm.score_report["timestamp"] = datetime.datetime.now(
+                    datetime.UTC
+                ).isoformat(" ")[:19]
+                self.n1mm.score_report["contest"] = self.contest.cabrillo_name
+                self.n1mm.score_report["call"] = self.station.get("Call", "")
+                self.n1mm.score_report["ops"] = self.pref.get("current_op", "")
+                self.n1mm.score_report["class"] = {
+                    "ops": self.contest_settings.get("OperatorCategory", ""),
+                    "mode": self.contest_settings.get("ModeCategory", ""),
+                    "power": self.contest_settings.get("PowerCategory", ""),
+                    "bands": self.contest_settings.get("BandCategory", ""),
+                    "transmitter": self.contest_settings.get("TransmitterCategory", ""),
+                }
+                self.update_n1mm_score()
+
             self.contest.reset_label(self)
-            if (
-                self.contest.name != "ICWC Medium Speed Test"
-                and self.contest.name != "RAEM"
-                and self.contest.name != "QSO PARTY SN"
+            if not self.contest.name in (
+                "ICWC Medium Speed Test",
+                "RAEM",
+                "QSO PARTY SN",
+                "California QSO Party",
             ):
                 match self.current_mode:
                     case "LSB" | "USB" | "SSB" | "FM" | "AM":
@@ -3163,6 +3190,7 @@ class MainWindow(QtWidgets.QMainWindow):
             logger.debug("packets %s", f"{self.n1mm.send_contact_packets}")
             if self.n1mm.send_contact_packets:
                 self.n1mm.contact_info["timestamp"] = self.contact["TS"]
+                self.n1mm.score_report["timestamp"] = self.contact["TS"]
                 self.n1mm.contact_info["oldcall"] = self.n1mm.contact_info["call"] = (
                     self.contact["Call"]
                 )
@@ -3173,11 +3201,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.n1mm.contact_info["contestname"] = self.contact[
                     "ContestName"
                 ].replace("-", "")
+                self.n1mm.score_report["contest"] = self.contact["ContestName"].replace(
+                    "-", ""
+                )
                 self.n1mm.contact_info["contestnr"] = self.contact["ContestNR"]
                 self.n1mm.contact_info["stationprefix"] = self.contact["StationPrefix"]
                 self.n1mm.contact_info["wpxprefix"] = self.contact["WPXPrefix"]
+                self.n1mm.contact_info["continent"] = self.contact.get("Continent", "")
+                self.n1mm.contact_info["countryprefix"] = self.contact.get(
+                    "CountryPrefix", ""
+                )
                 self.n1mm.contact_info["IsRunQSO"] = self.contact["IsRunQSO"]
                 self.n1mm.contact_info["operator"] = self.contact["Operator"]
+                self.n1mm.score_report["call"] = self.contact["Operator"]
                 self.n1mm.contact_info["mycall"] = self.contact["Operator"]
                 self.n1mm.contact_info["StationName"] = self.n1mm.contact_info[
                     "NetBiosName"
@@ -3201,7 +3237,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.n1mm.contact_info["section"] = self.contact["Sect"]
                 self.n1mm.contact_info["prec"] = self.contact["Prec"]
                 self.n1mm.contact_info["ck"] = self.contact["CK"]
-                self.n1mm.contact_info["zn"] = self.contact["ZN"]
+                self.n1mm.contact_info["zone"] = self.contact["ZN"]
                 self.n1mm.contact_info["power"] = self.contact["Power"]
                 self.n1mm.contact_info["band"] = self.contact["Band"]
                 logger.debug("%s", f"{self.n1mm.contact_info}")
@@ -3245,6 +3281,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.rate_window:
             self.rate_window.msg_from_main(cmd)
 
+    def update_n1mm_score(self) -> None:
+        if self.n1mm and self.n1mm.send_score_packets:
+            self.n1mm.send_score()
+
     def update_rtc_xml(self) -> None:
         """Update RTC XML"""
         if self.pref.get("send_rtc_scores", False):
@@ -3283,7 +3323,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.contest_dialog.dateTimeEdit.setTime(QtCore.QTime(0, 0))
         self.contest_dialog.power.setCurrentText("LOW")
         self.contest_dialog.station.setCurrentText("FIXED")
-        self.contest_dialog.open()
+        self.contest_dialog.exec()
 
     def save_contest(self) -> None:
         """
@@ -3375,7 +3415,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_dialog.RoverQTH.setText(self.station.get("RoverQTH", ""))
         self.settings_dialog.Club.setText(self.station.get("Club", ""))
         self.settings_dialog.Email.setText(self.station.get("Email", ""))
-        self.settings_dialog.open()
+        self.settings_dialog.exec()
 
     def save_settings(self) -> None:
         """
@@ -3603,6 +3643,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if "{WIPE}" in macro:
             macro = macro.replace("{WIPE}", "")
             self.clearinputs()
+        if "{VOICE0}" in macro:
+            macro = macro.replace("{VOICE0}", "")
+            if self.rig_control:
+                self.rig_control.sendvoicememory(memoryspot=0)
         if "{VOICE1}" in macro:
             macro = macro.replace("{VOICE1}", "")
             if self.rig_control:
@@ -4180,7 +4224,10 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         The text in the receive field has changed.
         """
-        if self.contest and "DX-Pedition" in self.contest.name:
+        if self.contest and self.contest.name in [
+            "DX-Pedition",
+            "California QSO Party",
+        ]:
             text = self.receive.text()
             text = text.upper()
             position = self.receive.cursorPosition()
