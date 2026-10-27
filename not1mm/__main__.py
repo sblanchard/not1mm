@@ -24,6 +24,7 @@ from pathlib import Path
 from shutil import copyfile
 
 import notctyparser
+import serial
 
 if sys.platform == "darwin":
     try:
@@ -45,9 +46,12 @@ from PyQt6.QtCore import (
     QCoreApplication,
     QDir,
     QEvent,
+    QObject,
     QSettings,
     Qt,
     QThread,
+    QTimer,
+    pyqtSignal,
 )
 from PyQt6.QtGui import (
     QCloseEvent,
@@ -63,6 +67,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QLabel,
     QLineEdit,
     QPushButton,
     QSplashScreen,
@@ -105,9 +110,11 @@ from not1mm.lib.i18n import (
 from not1mm.lib.multicast import Multicast
 from not1mm.lib.n1mm import N1MM
 from not1mm.lib.new_contest import NewContest
+from not1mm.lib.otrsp import OTRSP
 from not1mm.lib.preferences import Preferences
 from not1mm.lib.select_contest import SelectContest
 from not1mm.lib.settings import Settings
+from not1mm.lib.so2r import SO2RController, cw_duration, other_radio
 from not1mm.lib.super_check_partial import SCP
 from not1mm.lib.version import __version__
 from not1mm.lib.versiontest import VersionTest
@@ -123,6 +130,12 @@ from not1mm.voice_keying import Voice, has_output_device
 from not1mm.zone_tracker import ZoneWindow
 
 poll_time = datetime.datetime.now(tz=datetime.UTC)
+
+
+class KeyerBridge(QObject):
+    """Carries WinKeyer callbacks from its serial thread to the GUI thread."""
+
+    speed_pot = pyqtSignal(int)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -166,6 +179,7 @@ class MainWindow(QtWidgets.QMainWindow):
     voice_output_available = False
 
     radio_thread = QThread()
+    radio2_thread = QThread()
     voice_thread = QThread()
     rtc_thread = QThread()
 
@@ -193,11 +207,27 @@ class MainWindow(QtWidgets.QMainWindow):
     previous_language = "en_US"
 
     auto_cq = False
+    auto_cq_radio = 1
     auto_cq_then = datetime.datetime.now(tz=datetime.UTC)
     auto_cq_time = datetime.datetime.now(tz=datetime.UTC)
     auto_cq_delay = 15000
 
     server_commands: typing.ClassVar = []
+
+    # SO2R. so2r is None unless SO2R is enabled in the settings.
+    so2r = None
+    otrsp = None
+    radios: typing.ClassVar = {}
+    so2r_radio_state: typing.ClassVar = {}
+    so2r_entries: typing.ClassVar = {}
+    so2r_otrsp_sent: typing.ClassVar = {}
+    so2r_label = None
+    dueling_cq = False
+    dueling_radio = 1
+    dueling_state = "sending"
+    dueling_gap_until = datetime.datetime.now(tz=datetime.UTC)
+    cw_tx_until = datetime.datetime.now(tz=datetime.UTC)
+    cw_last_send = datetime.datetime.now(tz=datetime.UTC)
 
     def __init__(self, splash):
         super().__init__()
@@ -323,6 +353,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dupe_indicator.hide()
 
         self.cw_speed.valueChanged.connect(self.cwspeed_spinbox_changed)
+
+        self.keyer_bridge = KeyerBridge()
+        self.keyer_bridge.speed_pot.connect(self.winkeyer_speed_pot)
+        self.so2r_label = QLabel()
+        self.statusBar().addPermanentWidget(self.so2r_label, 1)
+        self.statusBar().hide()
+        self.dueling_timer = QTimer()
+        self.dueling_timer.timeout.connect(self.dueling_tick)
 
         self.cw_entry.textChanged.connect(self.handle_text_change)
         self.cw_entry.returnPressed.connect(self.toggle_cw_entry)
@@ -1634,10 +1672,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # self.send_backspace()
             self.oldtext = newtext
             return
-        if self.pref.get("cwtype") == 3 and self.rig_control is not None:
-            self.rig_control.sendcw(newtext[len(self.oldtext) :])
-        elif self.cw is not None:
-            self.cw.sendcw(newtext[len(self.oldtext) :])
+        self.send_cw_text(newtext[len(self.oldtext) :])
         self.oldtext = newtext
 
     def change_to_band_and_mode(self, band_name: str, mode: str) -> None:
@@ -1676,6 +1711,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self.tray_icon is not None:
             self.tray_icon.hide()
+
+        self.so2r_shutdown()
+        if self.cw is not None:
+            self.cw.close()
+        if self.vfo_window:
+            self.vfo_window.shutdown()
 
         try:
             if self.radio_thread.isRunning():
@@ -2429,6 +2470,29 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         return file
 
+    def get_save_filename(self, default_filename: str, file_filter: str) -> str:
+        """
+        Ask where to save an exported file.
+
+        Parameters:
+        ----------
+        default_filename: suggested path for the file
+        file_filter: Qt file filter, e.g. 'ADIF (*.adi)'
+
+        Returns:
+        -------
+        str: chosen filename, or empty string if cancelled
+        """
+
+        file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save As",
+            default_filename,
+            f"{file_filter};;Any (*.*)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        return file
+
     def recalculate_mults(self) -> None:
         """Recalculate Multipliers"""
         self.contest.recalculate_mults(self)
@@ -2675,30 +2739,361 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cw.speed = self.cw_speed.value()
         if self.cw.servertype == 1:
             self.cw.sendcw(f"\x1b2{self.cw.speed}")
-        if self.cw.servertype == 2:
+        if self.cw.servertype in (2, 4):
             self.cw.set_winkeyer_speed(self.cw.speed)
-        if self.rig_control and self.rig_control.cat and self.pref.get("cwtype") == 3:
-            self.rig_control.set_cw_speed(self.cw.speed)
+        if self.pref.get("cwtype") == 3:
+            for rig in self.radios.values() if self.so2r else [self.rig_control]:
+                if rig and rig.cat:
+                    rig.set_cw_speed(self.cw.speed)
+
+    def winkeyer_speed_pot(self, wpm: int) -> None:
+        """The WinKeyer speed pot moved."""
+        self.cw_speed.setValue(wpm)
 
     def stop_cw(self) -> None:
         """Stops CW output"""
         self.auto_cq = False
         self.leftdot.hide()
         self.cwprogressBar.hide()
+        self.stop_dueling_cq()
+        self.abort_keyer()
+
+    def abort_keyer(self) -> None:
+        """Stop the keyer sending without touching auto CQ or dueling CQ."""
+        self.cw_tx_until = datetime.datetime.now(tz=datetime.UTC)
         if self.cw is not None:
             if self.cw.servertype == 1:
                 self.cw.sendcw("\x1b4")
                 return
-            if self.cw.servertype == 2:
+            if self.cw.servertype in (2, 4):
                 self.cw.winkeyer_stop()
                 return
+        rig = self.so2r_rig(self.so2r.tx) if self.so2r else self.rig_control
+        if rig and rig.cat and rig.online and self.pref.get("cwtype") == 3:
+            rig.stopcw()
+
+    def send_cw_text(self, text: str, radio: int | None = None) -> None:
+        """
+        Send text with the configured keyer.
+        With SO2R it goes out on radio, or on the focused radio when None.
+        """
+        radio = self.so2r_prepare_tx(radio)
+        if self.pref.get("cwtype") == 3:
+            rig = self.so2r_rig(radio)
+            if rig is None:
+                return
+            rig.sendcw(text)
+        elif self.cw is not None:
+            self.cw.sendcw(text)
+        else:
+            return
+        now = datetime.datetime.now(tz=datetime.UTC)
+        self.cw_last_send = now
+        self.cw_tx_until = max(now, self.cw_tx_until) + datetime.timedelta(
+            seconds=cw_duration(text, self.cw_speed.value())
+        )
+
+    def keyer_busy(self) -> bool:
+        """True while CW is (probably) being sent."""
+        now = datetime.datetime.now(tz=datetime.UTC)
+        busy = self.cw.busy if self.cw is not None else None
+        if busy is None:
+            return now < self.cw_tx_until
+        # The keyer's busy status lags the bytes we write by a moment.
+        return busy or now < self.cw_last_send + datetime.timedelta(seconds=0.3)
+
+    # SO2R
+
+    def so2r_rig(self, radio: int | None):
+        """The Radio object for radio 1 or 2, or the only radio without SO2R."""
+        if self.so2r is None:
+            return self.rig_control
+        return self.radios.get(radio or self.so2r.focus)
+
+    def so2r_prepare_tx(self, radio: int | None = None) -> int:
+        """
+        Give radio (default: the focused radio) transmit focus before sending.
+        CW still going out on the other radio is aborted first, so it does
+        not continue on the wrong radio.
+        """
+        if self.so2r is None:
+            return 1
+        radio = radio or self.so2r.focus
+        if radio != self.so2r.tx and self.keyer_busy():
+            self.abort_keyer()
+        if self.so2r.set_tx(radio):
+            self.so2r_update_status()
+        return radio
+
+    def so2r_setup(self) -> None:
+        """Start radio 2, the OTRSP controller and SO2R state from preferences."""
+        if not self.pref.get("so2r_enabled", False):
+            return
+        radio2 = Radio(
+            self.pref.get("so2r_radio2_interface", "rigctld"),
+            self.pref.get("so2r_radio2_ip", "127.0.0.1"),
+            int(self.pref.get("so2r_radio2_port", 4533)),
+        )
+        radio2.delta = int(self.pref.get("CAT_polldelta", 555))
+        radio2.moveToThread(self.radio2_thread)
+        self.radio2_thread.started.connect(radio2.run)
+        self.radio2_thread.finished.connect(radio2.deleteLater)
+        radio2.poll_callback.connect(self.poll_radio_2)
+        self.radio2_thread.start()
+        self.radios = {1: self.rig_control, 2: radio2}
+        self.so2r_radio_state = {1: self.radio_state, 2: {}}
+        self.so2r_entries = {1: None, 2: None}
+        self.so2r_otrsp_sent = {}
+
+        self.otrsp = None
+        if self.pref.get("so2r_otrsp", False):
+            if self.pref.get("so2r_otrsp_transport", "tcp") == "tcp":
+                otrsp = OTRSP(
+                    host=self.pref.get("so2r_otrsp_host", ""),
+                    tcp_port=int(self.pref.get("so2r_otrsp_tcp_port", 12060)),
+                )
+                usable = bool(otrsp.host)
+            else:
+                otrsp = OTRSP(self.pref.get("so2r_otrsp_port", ""))
+                usable = bool(otrsp.device)
+            if usable:
+                try:
+                    otrsp.open()
+                    self.otrsp = otrsp
+                except (serial.SerialException, OSError) as err:
+                    logger.warning("OTRSP: %s", err)
+                    if otrsp.host:
+                        # Keep it: it reconnects in the background.
+                        self.otrsp = otrsp
+                    else:
+                        self.show_message_box(
+                            f"Could not open the OTRSP device "
+                            f"{otrsp.address}:\n{err}",
+                            blocking=False,
+                        )
+
+        select_key_output = None
         if (
-            self.rig_control
-            and self.rig_control.cat
-            and self.rig_control.online
-            and self.pref.get("cwtype") == 3
+            self.cw is not None
+            and self.cw.winkeyer is not None
+            and self.pref.get("so2r_wk_key_outputs", True)
         ):
-            self.rig_control.stopcw()
+            select_key_output = self.cw.select_key_output
+        self.so2r = SO2RController(self.otrsp, select_key_output)
+        self.so2r.sync()
+        self.statusBar().show()
+        self.so2r_update_status()
+
+    def so2r_shutdown(self) -> None:
+        """Stop radio 2 and the OTRSP controller, leaving radio 1 in focus."""
+        if self.so2r is None:
+            return
+        self.stop_dueling_cq()
+        self.so2r_set_focus(1)
+        try:
+            if self.radio2_thread.isRunning():
+                self.radios[2].time_to_quit = True
+                self.radio2_thread.quit()
+                self.radio2_thread.wait(1000)
+        except (RuntimeError, AttributeError, KeyError):
+            ...
+        if self.otrsp is not None:
+            self.otrsp.close()
+            self.otrsp = None
+        self.so2r = None
+        self.radios = {}
+        self.statusBar().hide()
+
+    def poll_radio_1(self, the_dict: dict) -> None:
+        self.so2r_poll(1, the_dict)
+
+    def poll_radio_2(self, the_dict: dict) -> None:
+        self.so2r_poll(2, the_dict)
+
+    def so2r_poll(self, radio: int, the_dict: dict) -> None:
+        """
+        Poll results with SO2R. The focused radio drives the main window
+        through poll_radio, the other radio only updates its saved state.
+        """
+        if self.so2r is None:
+            if radio == 1:
+                self.poll_radio(the_dict)
+            return
+        state = self.so2r_radio_state[radio]
+        if radio == self.so2r.focus:
+            self.poll_radio(the_dict)
+        else:
+            vfo = str(the_dict.get("vfoa", ""))
+            if vfo.isnumeric():
+                state["vfoa"] = vfo
+                state["band"] = getband(vfo)
+            mode = the_dict.get("mode", "")
+            if mode and "set_freq:" not in mode and not mode.isnumeric():
+                state["mode"] = mode
+            if the_dict.get("bw"):
+                state["bw"] = the_dict.get("bw")
+        if self.otrsp is not None:
+            self.otrsp.ensure_connected()
+            sent = (state.get("band"), state.get("mode"))
+            if sent != self.so2r_otrsp_sent.get(radio) and all(sent):
+                self.so2r_otrsp_sent[radio] = sent
+                self.otrsp.band(radio, sent[0])
+                self.otrsp.mode(radio, sent[1])
+        self.so2r_update_status()
+
+    def so2r_set_focus(self, radio: int) -> None:
+        """
+        Move keyboard focus to radio 1 or 2. The entry fields of the radio
+        losing focus are put aside and those of the other radio come back,
+        so a QSO in progress on each radio survives switching back and forth.
+        """
+        if self.so2r is None or radio == self.so2r.focus:
+            return
+        self.so2r_entries[self.so2r.focus] = self.so2r_capture_entry()
+        self.so2r.set_focus(radio)
+        self.rig_control = self.radios[radio]
+        self.radio_state = self.so2r_radio_state[radio]
+        self.so2r_restore_entry(self.so2r_entries.get(radio))
+        self.so2r_update_status()
+
+    def so2r_capture_entry(self) -> dict:
+        focused = QApplication.focusWidget()
+        return {
+            "fields": {name: widget.text() for widget, name in self.inputs_dict.items()},
+            "focus_field": self.inputs_dict.get(focused, "callsign"),
+            "contact": self.contact.copy(),
+            "run_state": self.pref.get("run_state", True),
+            "heading_distance": self.heading_distance.text(),
+            "dx_entity": self.dx_entity.text(),
+            "history_info": self.history_info.text(),
+            "sandpfreq": self.sandpfreq,
+            "cq_freq": self.cq_freq,
+        }
+
+    def so2r_restore_entry(self, entry: dict | None) -> None:
+        vfo = str(self.radio_state.get("vfoa", ""))
+        mode = self.radio_state.get("mode", "")
+        if mode:
+            self.setmode_from_rig(mode)
+        if vfo.isnumeric():
+            self.set_band_indicator(getband(vfo))
+        self.set_window_title()
+        if entry is None:
+            self.clearinputs()
+        else:
+            self.set_running(entry["run_state"])
+            for widget, name in self.inputs_dict.items():
+                widget.setText(entry["fields"].get(name, ""))
+            self.contact = entry["contact"]
+            self.heading_distance.setText(entry["heading_distance"])
+            self.dx_entity.setText(entry["dx_entity"])
+            self.history_info.setText(entry["history_info"])
+            self.sandpfreq = entry["sandpfreq"]
+            self.cq_freq = entry["cq_freq"]
+            self.dupe_indicator.hide()
+            self.callsign.setStyleSheet("")
+            call = self.callsign.text()
+            if self.contest and len(call) >= 3:
+                self.check_dupe(call)
+            cmd = {"cmd": "CALLCHANGED", "call": call}
+            for window in (self.bandmap_window, self.log_window, self.check_window):
+                if window:
+                    window.msg_from_main(cmd)
+            widgets = {name: widget for widget, name in self.inputs_dict.items()}
+            field = widgets.get(entry["focus_field"], self.callsign)
+            field.setFocus()
+            field.deselect()
+            field.end(False)
+        if vfo.isnumeric():
+            self.contact["Band"] = get_logged_band(vfo)
+        if self.bandmap_window and vfo.isnumeric():
+            self.bandmap_window.msg_from_main(
+                {
+                    "cmd": "RADIO_STATE",
+                    "band": getband(vfo),
+                    "vfoa": vfo,
+                    "mode": mode,
+                    "bw": self.radio_state.get("bw", ""),
+                }
+            )
+
+    def so2r_update_status(self) -> None:
+        """Show both radios, focus, TX and audio mode in the status bar."""
+        if self.so2r is None or self.so2r_label is None:
+            return
+        parts = []
+        for radio in (1, 2):
+            state = self.so2r_radio_state.get(radio, {})
+            try:
+                freq = f"{int(state.get('vfoa', 0)) / 1000:.1f}"
+            except ValueError:
+                freq = "?"
+            if radio == self.so2r.focus:
+                run = self.pref.get("run_state", True)
+            else:
+                entry = self.so2r_entries.get(radio)
+                run = entry["run_state"] if entry else self.pref.get("run_state", True)
+            parts.append(
+                f"{'▶' if radio == self.so2r.focus else '  '} R{radio} {freq} "
+                f"{state.get('mode', '')} {'RUN' if run else 'S&P'}"
+                f"{' [TX]' if radio == self.so2r.tx else ''}"
+            )
+        flags = ["STEREO" if self.so2r.stereo else "MONO"]
+        if self.dueling_cq:
+            flags.append("DUELING CQ")
+        if self.pref.get("so2r_otrsp", False) and (
+            self.otrsp is None or not self.otrsp.is_open
+        ):
+            flags.append("OTRSP OFFLINE")
+        self.so2r_label.setText("    ".join(parts) + "    " + " ".join(flags))
+
+    def toggle_dueling_cq(self) -> None:
+        """Alternate the F1 CQ between the two radios, listening to the idle one."""
+        if self.dueling_cq:
+            self.stop_dueling_cq()
+            return
+        if self.so2r is None:
+            self.show_message_box("Dueling CQ needs SO2R enabled in the settings.")
+            return
+        if self.current_mode != "CW" or self.cw is None:
+            self.show_message_box("Dueling CQ works in CW with a CW keyer set up.")
+            return
+        self.auto_cq = False
+        self.dueling_cq = True
+        self.dueling_radio = self.so2r.focus
+        self.dueling_send()
+        self.dueling_timer.start(50)
+
+    def stop_dueling_cq(self) -> None:
+        if not self.dueling_cq:
+            return
+        self.dueling_cq = False
+        self.dueling_timer.stop()
+        if self.so2r is not None:
+            self.so2r.set_listen(None)
+            self.so2r_update_status()
+
+    def dueling_send(self) -> None:
+        self.so2r.set_listen(other_radio(self.dueling_radio))
+        self.process_function_key(self.F1, radio=self.dueling_radio)
+        self.dueling_state = "sending"
+        self.so2r_update_status()
+
+    def dueling_tick(self) -> None:
+        """Wait for the CQ to end, then the gap, then CQ on the other radio."""
+        if not self.dueling_cq or self.so2r is None:
+            self.dueling_timer.stop()
+            return
+        now = datetime.datetime.now(tz=datetime.UTC)
+        if self.dueling_state == "sending":
+            if not self.keyer_busy():
+                self.dueling_state = "gap"
+                self.dueling_gap_until = now + datetime.timedelta(
+                    milliseconds=int(self.pref.get("so2r_dueling_gap_ms", 200))
+                )
+        elif now >= self.dueling_gap_until:
+            self.dueling_radio = other_radio(self.dueling_radio)
+            self.dueling_send()
 
     def stop_all(self) -> None:
         """Stop CW and rotator."""
@@ -2789,7 +3184,17 @@ class MainWindow(QtWidgets.QMainWindow):
         key_bindings = self.pref.get(
             "key_bindings", not1mm.actions.default_key_bindings
         )
-        key_name = QKeySequence(event.key() | event.modifiers().value).toString()
+        modifiers = event.modifiers()
+        if event.key() in (
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            # macOS flags every arrow key as a keypad key, which would turn
+            # "Ctrl+Left" into "Ctrl+Num+Left" and miss the binding.
+            modifiers &= ~Qt.KeyboardModifier.KeypadModifier
+        key_name = QKeySequence(event.key() | modifiers.value).toString()
 
         action = None
         if obj == self.callsign:
@@ -2808,6 +3213,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # generic binding
         if action is None:
             action = key_bindings.get(key_name, None)
+        # SO2R keys, unless the user bound the key to something else
+        if action is None and self.so2r is not None and key_name not in key_bindings:
+            action = not1mm.actions.so2r_key_bindings.get(key_name, None)
 
         # A second consecutive STOP_ALL (Esc) also clears the inputs
         if action == "STOP_ALL":
@@ -2932,6 +3340,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.cwprogressBar.setValue(100)
                 self.cwprogressBar.show()
                 self.auto_cq = True
+                self.auto_cq_radio = self.so2r.focus if self.so2r else 1
                 self.auto_cq_then = datetime.datetime.now(tz=datetime.UTC)
                 self.auto_cq_time = datetime.datetime.now(
                     tz=datetime.UTC
@@ -3681,7 +4090,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.rig_control:
             # self.leftdot.setPixmap(self.greendot)
             # app.processEvents()
-            self.rig_control.ptt_on()
+            self.so2r_rig(self.so2r.tx if self.so2r else None).ptt_on()
 
     def ptt_off(self) -> None:
         """
@@ -3700,10 +4109,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.rig_control:
             # self.leftdot.setPixmap(self.reddot)
             # app.processEvents()
-            self.rig_control.ptt_off()
+            self.so2r_rig(self.so2r.tx if self.so2r else None).ptt_off()
 
     def process_function_key(
-        self, function_key: QPushButton, rttysendrx: bool = True
+        self,
+        function_key: QPushButton,
+        rttysendrx: bool = True,
+        radio: int | None = None,
     ) -> None:
         """
         Called when a function key is clicked.
@@ -3715,6 +4127,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         rttysendrx : bool
         Should a '^r' be appended.
+
+        radio : int | None
+        SO2R radio to transmit on. None means the focused radio and is how
+        operator key presses arrive, which also ends dueling CQ.
 
         Returns
         -------
@@ -3730,12 +4146,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.show_CW_macros()
                 logger.warning("No available output sound device for voice keying.")
                 return
+        if radio is None:
+            self.stop_dueling_cq()
         if function_key.toolTip()[0:3] == "RI:":
-            self.rig_control.cat.send_cat_string(function_key.toolTip()[3:])
+            self.so2r_rig(radio).cat.send_cat_string(function_key.toolTip()[3:])
             return
         if self.n1mm:
             self.n1mm.radio_info["FunctionKeyCaption"] = function_key.text()
         if self._is_phone_mode():
+            # SO2R: route mic and PTT first. CW is routed in send_cw_text.
+            self.so2r_prepare_tx(radio)
             self.voice_process.voice_string(self.process_macro(function_key.toolTip()))
             return
         if self.radio_state.get("mode") in [
@@ -3747,6 +4167,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "DIGI-U",
             "DIGI-L",
         ]:
+            self.so2r_prepare_tx(radio)
             self.fldigi_util.send_string(
                 self.process_macro(function_key.toolTip()), rxafter=rttysendrx
             )
@@ -3755,10 +4176,9 @@ class MainWindow(QtWidgets.QMainWindow):
             macro_contests = self.process_macro(function_key.toolTip())
             if macro_contests == "":
                 return
-            if self.pref.get("cwtype") == 3 and self.rig_control is not None:
-                self.rig_control.sendcw(macro_contests + " ")
+            self.send_cw_text(macro_contests + " ", radio=radio)
+            if self.pref.get("cwtype") == 3:
                 return
-            self.cw.sendcw(macro_contests + " ")
             if self.pref.get("cwtype") == 2:
                 # I put this back in 'cause no one will know to update winkeyerserial.
                 time.sleep(0.2)
@@ -3868,6 +4288,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.rtc_thread.start()
             self.rtc_service.rtc_callback.connect(self.rtc_response)
 
+        self.so2r_shutdown()
         try:
             if self.radio_thread.isRunning():
                 self.rig_control.time_to_quit = True
@@ -3923,11 +4344,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rig_control.moveToThread(self.radio_thread)
         self.radio_thread.started.connect(self.rig_control.run)
         self.radio_thread.finished.connect(self.rig_control.deleteLater)
-        self.rig_control.poll_callback.connect(self.poll_radio)
+        if self.pref.get("so2r_enabled", False):
+            self.rig_control.poll_callback.connect(self.poll_radio_1)
+        else:
+            self.rig_control.poll_callback.connect(self.poll_radio)
         self.radio_thread.start()
 
+        if self.cw is not None:
+            self.cw.close()
         self.cw = None
-        if (
+        if self.pref.get("cwtype") == 4:
+            self.cw = CW(
+                4,
+                self.pref.get("wk_serial_port", ""),
+                0,
+                on_speed_pot=self.keyer_bridge.speed_pot.emit,
+            )
+            self.cw_speed.setValue(int(self.pref.get("cw_speed", 20)))
+            self.cw.speed = int(self.pref.get("cw_speed", 20))
+            if self.cw.winkeyer is None:
+                self.show_message_box(
+                    f"WinKeyer not available:\n{self.cw.error}", blocking=False
+                )
+            else:
+                self.cw.configure_winkeyer(
+                    ptt=self.pref.get("wk_ptt", True),
+                    sidetone=self.pref.get("wk_sidetone", True),
+                    swap_outputs=self.pref.get("wk_swap_outputs", False),
+                    lead_ms=int(self.pref.get("wk_ptt_lead_ms", 0)),
+                    tail_ms=int(self.pref.get("wk_ptt_tail_ms", 0)),
+                )
+        elif (
             self.pref.get("cwport")
             and self.pref.get("cwip")
             and self.pref.get("cwtype")
@@ -3941,6 +4388,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cw.speed = int(self.pref.get("cw_speed", 20))
             if self.cw.servertype == 2:
                 self.cw.set_winkeyer_speed(int(self.pref.get("cw_speed", 20)))
+
+        self.so2r_setup()
 
         self.n1mm = None
         if self.pref.get("send_n1mm_packets", False):
@@ -4296,7 +4745,9 @@ class MainWindow(QtWidgets.QMainWindow):
         -------
         None
         """
-        if self.auto_cq is True:
+        if self.auto_cq is True and (
+            self.so2r is None or self.auto_cq_radio == self.so2r.focus
+        ):
             self.stop_cw()
             self.voice_process.stop_voice()
         self.get_sn()
@@ -4615,6 +5066,30 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.dupe_indicator.hide()
                 self.callsign.setStyleSheet("")
 
+    def setmode_from_rig(self, mode: str) -> None:
+        """Call setmode with the mode family of a mode reported by the rig."""
+        if mode in ("CW", "CW-U", "CW-L", "CWR"):
+            self.setmode(mode)
+        if mode in ("LSB", "USB", "FM", "AM"):
+            self.setmode("SSB")
+        if mode in (
+            "RTTY",
+            "RTTY-R",
+            "LSB-D",
+            "USB-D",
+            "AM-D",
+            "FM-D",
+            "DIGI-U",
+            "DIGI-L",
+            "DIG",
+            "RTTYR",
+            "PKTLSB",
+            "PKTUSB",
+            "FSK",
+            "PKT",
+        ):
+            self.setmode("RTTY")
+
     def setmode(self, mode: str) -> None:
         """Call when the mode changes."""
         if mode in ("CW", "CW-U", "CW-L", "CWR", "CW-R"):
@@ -4735,7 +5210,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.auto_cq_time = now + datetime.timedelta(
                     milliseconds=self.auto_cq_delay
                 )
-                self.process_function_key(self.F1)
+                if self.so2r is None:
+                    self.process_function_key(self.F1)
+                elif self.so2r.tx == self.auto_cq_radio or not self.keyer_busy():
+                    self.process_function_key(self.F1, radio=self.auto_cq_radio)
+                # else the other radio is still sending; try again next cycle
             if now > self.server_seen:
                 self.server_icon.setPixmap(self.redserver)
 
@@ -4780,27 +5259,7 @@ class MainWindow(QtWidgets.QMainWindow):
             info_dirty = True
             self.radio_state["bw"] = bw
 
-        if mode in ("CW", "CW-U", "CW-L", "CWR"):
-            self.setmode(mode)
-        if mode in ("LSB", "USB", "FM", "AM"):
-            self.setmode("SSB")
-        if mode in (
-            "RTTY",
-            "RTTY-R",
-            "LSB-D",
-            "USB-D",
-            "AM-D",
-            "FM-D",
-            "DIGI-U",
-            "DIGI-L",
-            "DIG",
-            "RTTYR",
-            "PKTLSB",
-            "PKTUSB",
-            "FSK",
-            "PKT",
-        ):
-            self.setmode("RTTY")
+        self.setmode_from_rig(mode)
 
         if self.bandmap_window:
             cmd = {}

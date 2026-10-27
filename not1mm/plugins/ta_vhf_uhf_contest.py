@@ -216,6 +216,9 @@ def edi(self, parent=None):
 
     date_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = Path.home() / f"{my_call}_{cabrillo_name}_{date_time}.edi"
+    filename = self.get_save_filename(str(filename), "EDI (*.edi)")
+    if not filename:
+        return
 
     bands = {}
     for q in log:

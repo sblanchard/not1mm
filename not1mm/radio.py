@@ -63,17 +63,21 @@ class Radio(QObject):
             else:
                 self.cat = FakeCAT(self.host, self.port)
             self.online = self.cat.online
-            self.modes = self.cat.get_mode_list()
-            for pos_cw in self.cw_list:
-                if pos_cw in self.modes:
-                    self.last_cw_mode = pos_cw
-                    break
-            for pos_rtty in self.rtty_list:
-                if pos_rtty in self.modes:
-                    self.last_data_mode = pos_rtty
-                    break
+            self.load_modes()
         except ConnectionResetError:
             ...
+
+    def load_modes(self) -> None:
+        """Read the radio's mode list and pick its CW and data modes."""
+        self.modes = self.cat.get_mode_list()
+        for pos_cw in self.cw_list:
+            if pos_cw in self.modes:
+                self.last_cw_mode = pos_cw
+                break
+        for pos_rtty in self.rtty_list:
+            if pos_rtty in self.modes:
+                self.last_data_mode = pos_rtty
+                break
 
     def run(self):
         while not self.time_to_quit:
@@ -98,6 +102,10 @@ class Radio(QObject):
                 if bw:
                     self.bw = bw
                     self.online = True
+                # A radio that was not up yet when we started (e.g. a TCI
+                # server launched after not1mm) has no mode list until now.
+                if not self.modes and self.online:
+                    self.load_modes()
                 try:
                     self.poll_callback.emit(
                         {

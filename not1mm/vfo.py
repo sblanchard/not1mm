@@ -285,6 +285,14 @@ class VfoWindow(QDockWidget):
         message_box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
         _ = message_box.exec()
 
+    def shutdown(self) -> None:
+        """Release the CAT connection. TCI runs its own thread, which must be
+        stopped before the app exits."""
+        close = getattr(self.rig_control, "close", None)
+        if close is not None:
+            close()
+        self.rig_control = None
+
     def closeEvent(self, event) -> None:
         self.action.setChecked(False)
         self.vfowindow_closed.emit()

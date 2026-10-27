@@ -165,7 +165,7 @@ def CW_SPEED_UP(self) -> None:
         self.cw_speed.setValue(self.cw.speed)
         if self.cw.servertype == 1:
             self.cw.sendcw(f"\x1b2{self.cw.speed}")
-        if self.cw.servertype == 2:
+        if self.cw.servertype in (2, 4):
             self.cw.set_winkeyer_speed(self.cw_speed.value())
 
 
@@ -176,7 +176,7 @@ def CW_SPEED_DOWN(self) -> None:
         self.cw_speed.setValue(self.cw.speed)
         if self.cw.servertype == 1:
             self.cw.sendcw(f"\x1b2{self.cw.speed}")
-        if self.cw.servertype == 2:
+        if self.cw.servertype in (2, 4):
             self.cw.set_winkeyer_speed(self.cw_speed.value())
 
 
@@ -292,3 +292,43 @@ def EDIT_KEYS(self) -> None:
 def SHOW_HOTKEYS(self) -> None:
     """Show the hotkeys help window"""
     hotkey_window(self, default_key_bindings)
+
+
+# SO2R keys. These only apply while SO2R is enabled, and only for keys the
+# user has not bound to something else in the Edit Keys dialog.
+so2r_key_bindings = {
+    "Ctrl+Left": "SO2R_FOCUS_RADIO_1",
+    "Ctrl+Right": "SO2R_FOCUS_RADIO_2",
+    "Pause": "SO2R_SWAP_FOCUS",
+    "\\": "SO2R_SWAP_FOCUS",
+    "`": "SO2R_TOGGLE_STEREO",
+    "Ctrl+B": "SO2R_DUELING_CQ",
+}
+
+
+def SO2R_FOCUS_RADIO_1(self) -> None:
+    """SO2R: move keyboard focus to radio 1"""
+    self.so2r_set_focus(1)
+
+
+def SO2R_FOCUS_RADIO_2(self) -> None:
+    """SO2R: move keyboard focus to radio 2"""
+    self.so2r_set_focus(2)
+
+
+def SO2R_SWAP_FOCUS(self) -> None:
+    """SO2R: move keyboard focus to the other radio"""
+    if self.so2r is not None:
+        self.so2r_set_focus(2 if self.so2r.focus == 1 else 1)
+
+
+def SO2R_TOGGLE_STEREO(self) -> None:
+    """SO2R: toggle stereo (both radios) and mono (focused radio) headphones"""
+    if self.so2r is not None:
+        self.so2r.toggle_stereo()
+        self.so2r_update_status()
+
+
+def SO2R_DUELING_CQ(self) -> None:
+    """SO2R: start or stop dueling CQ (F1 alternating between radios)"""
+    self.toggle_dueling_cq()

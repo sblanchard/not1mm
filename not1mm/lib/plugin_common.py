@@ -93,6 +93,9 @@ def gen_adif(self, cabrillo_name: str, contest_id=""):
     filename = (
         str(Path.home()) + "/" + f"{station_callsign}_{cabrillo_name}_{date_time}.adi"
     )
+    filename = self.get_save_filename(filename, "ADIF (*.adi *.adif)")
+    if not filename:
+        return
     log = self.database.fetch_all_contacts_asc()
     try:
         with open(filename, "w", encoding="utf-8", newline="") as file_descriptor:

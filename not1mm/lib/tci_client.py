@@ -220,19 +220,19 @@ class TCIClient(QObject):
                 self, "shutdown", Qt.ConnectionType.BlockingQueuedConnection
             )
             self.thread.quit()
-            self.thread.wait(500)
-            # Both objects still have affinity to the now-dead TCI thread;
-            # deleteLater() (queued in shutdown) handles their destruction on
-            # that thread. Drop the Python references so we do not also free
-            # them here on the calling thread.
-            self.socket = None
-            self.reconnect_timer = None
+            self.thread.wait(2000)
 
     @pyqtSlot()
     def shutdown(self) -> None:
+        """Runs on the TCI thread. The socket and timer were created from
+        Python without a parent, so Python owns them: dropping the last
+        reference deletes the C++ object right away. That has to happen here,
+        on their own thread. Dropped from any other thread, the socket is
+        freed while this thread's event loop still polls its notifier, which
+        segfaults (seen on quit)."""
         if self.reconnect_timer is not None:
             self.reconnect_timer.stop()
-            self.reconnect_timer.deleteLater()
+            self.reconnect_timer = None
         if self.socket is not None:
             self.socket.close()
-            self.socket.deleteLater()
+            self.socket = None

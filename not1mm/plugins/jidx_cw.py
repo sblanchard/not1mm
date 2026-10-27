@@ -226,6 +226,9 @@ def cabrillo(self, file_encoding):
         + "/"
         + f"{self.station.get('Call', '').upper().replace('/','-')}_{cabrillo_name}_{date_time}.log"
     )
+    filename = self.get_save_filename(filename, "Cabrillo (*.log *.cbr)")
+    if not filename:
+        return
     logger.debug("%s", filename)
     result = self.cty_lookup(self.station.get("Call", ""))
     if result is not None:

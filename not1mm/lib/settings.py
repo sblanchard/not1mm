@@ -2,6 +2,7 @@
 
 import logging
 
+import serial.tools.list_ports
 from PyQt6 import QtWidgets
 
 from not1mm.lib.i18n import available_languages, load_ui
@@ -35,6 +36,7 @@ class Settings(QtWidgets.QDialog):
             "and 50001 or 40001 for TCI."
         )
         self.preference = pref
+        self.build_so2r_tab()
         if sd:
             self.devices = sd.query_devices()
         else:
@@ -150,8 +152,9 @@ class Settings(QtWidgets.QDialog):
             self.set_cwdaemon_port_hint()
         elif self.preference.get("cwtype") == 2:
             self.set_winkeyer_port_hint()
-        elif self.preference.get("cwtype") == 3:
+        elif self.preference.get("cwtype") in (3, 4):
             self.set_catforcw_port_hint()
+        self.setup_so2r_tab()
         self.cwpaddinglength_field.setValue(self.preference.get("cwpaddinglength", 3))
         self.cwstepping_field.setValue(self.preference.get("cwstepping", 1))
         self.cwsentrst_599.setChecked(self.preference.get("cwsentrst", "599") == "599")
@@ -240,6 +243,187 @@ class Settings(QtWidgets.QDialog):
         index = self.language.findData(value)
         if index != -1:
             self.language.setCurrentIndex(index)
+
+    def build_so2r_tab(self):
+        """Add the WinKeyer serial and SO2R settings as an extra tab."""
+        tab = QtWidgets.QWidget()
+        tab.setObjectName("so2r_tab")
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+
+        def port_combo():
+            combo = QtWidgets.QComboBox()
+            combo.setEditable(True)
+            combo.addItem("")
+            combo.addItems(ports)
+            return combo
+
+        wk_box = QtWidgets.QGroupBox("WinKeyer on a serial / USB port")
+        wk_form = QtWidgets.QFormLayout(wk_box)
+        self.usewkserial_radioButton = QtWidgets.QRadioButton(
+            "Use WinKeyer serial for CW (replaces cwdaemon / pywinkeyer / CAT)"
+        )
+        self.cwkeying_group.addButton(self.usewkserial_radioButton)
+        self.usewkserial_radioButton.clicked.connect(self.set_catforcw_port_hint)
+        wk_form.addRow(self.usewkserial_radioButton)
+        self.wk_serial_port = port_combo()
+        wk_form.addRow("Port", self.wk_serial_port)
+        self.wk_ptt = QtWidgets.QCheckBox("Key PTT output")
+        wk_form.addRow(self.wk_ptt)
+        self.wk_sidetone = QtWidgets.QCheckBox("Sidetone")
+        wk_form.addRow(self.wk_sidetone)
+        self.wk_ptt_lead = QtWidgets.QSpinBox()
+        self.wk_ptt_lead.setRange(0, 2500)
+        self.wk_ptt_lead.setSingleStep(10)
+        self.wk_ptt_lead.setSuffix(" ms")
+        wk_form.addRow("PTT lead in", self.wk_ptt_lead)
+        self.wk_ptt_tail = QtWidgets.QSpinBox()
+        self.wk_ptt_tail.setRange(0, 2500)
+        self.wk_ptt_tail.setSingleStep(10)
+        self.wk_ptt_tail.setSuffix(" ms")
+        wk_form.addRow("PTT tail", self.wk_ptt_tail)
+        self.wk_swap_outputs = QtWidgets.QCheckBox(
+            "Swap key outputs (radio 1 on KEY2, radio 2 on KEY1)"
+        )
+        wk_form.addRow(self.wk_swap_outputs)
+        layout.addWidget(wk_box)
+
+        so2r_box = QtWidgets.QGroupBox("SO2R")
+        so2r_form = QtWidgets.QFormLayout(so2r_box)
+        self.so2r_enabled = QtWidgets.QCheckBox(
+            "Enable SO2R (radio 1 uses the CAT settings on the Rig Control tab)"
+        )
+        so2r_form.addRow(self.so2r_enabled)
+        self.so2r_radio2_interface = QtWidgets.QComboBox()
+        self.so2r_radio2_interface.addItems(["rigctld", "flrig", "tci", "fake"])
+        so2r_form.addRow("Radio 2 CAT", self.so2r_radio2_interface)
+        self.so2r_radio2_ip = QtWidgets.QLineEdit()
+        so2r_form.addRow("Radio 2 address", self.so2r_radio2_ip)
+        self.so2r_radio2_port = QtWidgets.QLineEdit()
+        self.so2r_radio2_port.setToolTip(
+            "rigctld for a second radio is usually started with -t 4533. "
+            "For TCI use the second SDR's TCI port."
+        )
+        so2r_form.addRow("Radio 2 port", self.so2r_radio2_port)
+        self.so2r_otrsp = QtWidgets.QCheckBox(
+            "OTRSP SO2R controller (TX / RX headphone switching)"
+        )
+        so2r_form.addRow(self.so2r_otrsp)
+        self.so2r_otrsp_transport = QtWidgets.QComboBox()
+        self.so2r_otrsp_transport.addItem("TCP/IP", "tcp")
+        self.so2r_otrsp_transport.addItem("Serial port", "serial")
+        so2r_form.addRow("OTRSP connection", self.so2r_otrsp_transport)
+        self.so2r_otrsp_host = QtWidgets.QLineEdit()
+        self.so2r_otrsp_host.setPlaceholderText("IP address of the SO2R controller")
+        so2r_form.addRow("OTRSP address", self.so2r_otrsp_host)
+        self.so2r_otrsp_tcp_port = QtWidgets.QSpinBox()
+        self.so2r_otrsp_tcp_port.setRange(1, 65535)
+        so2r_form.addRow("OTRSP TCP port", self.so2r_otrsp_tcp_port)
+        self.so2r_otrsp_port = port_combo()
+        so2r_form.addRow("OTRSP serial port", self.so2r_otrsp_port)
+
+        def show_transport_fields():
+            tcp = self.so2r_otrsp_transport.currentData() == "tcp"
+            self.so2r_otrsp_host.setEnabled(tcp)
+            self.so2r_otrsp_tcp_port.setEnabled(tcp)
+            self.so2r_otrsp_port.setEnabled(not tcp)
+
+        self.so2r_otrsp_transport.currentIndexChanged.connect(show_transport_fields)
+        self.so2r_wk_key_outputs = QtWidgets.QCheckBox(
+            "Key radio 1 / radio 2 from the WinKeyer's two key outputs"
+        )
+        so2r_form.addRow(self.so2r_wk_key_outputs)
+        self.so2r_dueling_gap = QtWidgets.QSpinBox()
+        self.so2r_dueling_gap.setRange(0, 5000)
+        self.so2r_dueling_gap.setSingleStep(50)
+        self.so2r_dueling_gap.setSuffix(" ms")
+        so2r_form.addRow("Dueling CQ gap", self.so2r_dueling_gap)
+        layout.addWidget(so2r_box)
+        layout.addStretch()
+
+        self.tabWidget.addTab(tab, "SO2R")
+
+    def setup_so2r_tab(self):
+        """Fill the SO2R tab from preferences."""
+
+        def set_port(combo, value):
+            if value and combo.findText(value) == -1:
+                combo.addItem(value)
+            combo.setCurrentText(value)
+
+        self.usewkserial_radioButton.setChecked(self.preference.get("cwtype") == 4)
+        set_port(self.wk_serial_port, self.preference.get("wk_serial_port", ""))
+        self.wk_ptt.setChecked(bool(self.preference.get("wk_ptt", True)))
+        self.wk_sidetone.setChecked(bool(self.preference.get("wk_sidetone", True)))
+        self.wk_ptt_lead.setValue(int(self.preference.get("wk_ptt_lead_ms", 0)))
+        self.wk_ptt_tail.setValue(int(self.preference.get("wk_ptt_tail_ms", 0)))
+        self.wk_swap_outputs.setChecked(
+            bool(self.preference.get("wk_swap_outputs", False))
+        )
+        self.so2r_enabled.setChecked(bool(self.preference.get("so2r_enabled", False)))
+        self.so2r_radio2_interface.setCurrentText(
+            self.preference.get("so2r_radio2_interface", "rigctld")
+        )
+        self.so2r_radio2_ip.setText(
+            str(self.preference.get("so2r_radio2_ip", "127.0.0.1"))
+        )
+        self.so2r_radio2_port.setText(
+            str(self.preference.get("so2r_radio2_port", 4533))
+        )
+        self.so2r_otrsp.setChecked(bool(self.preference.get("so2r_otrsp", False)))
+        set_port(self.so2r_otrsp_port, self.preference.get("so2r_otrsp_port", ""))
+        index = self.so2r_otrsp_transport.findData(
+            self.preference.get("so2r_otrsp_transport", "tcp")
+        )
+        self.so2r_otrsp_transport.setCurrentIndex(max(index, 0))
+        self.so2r_otrsp_transport.currentIndexChanged.emit(
+            self.so2r_otrsp_transport.currentIndex()
+        )
+        self.so2r_otrsp_host.setText(
+            str(
+                self.preference.get("so2r_otrsp_host", "")
+                or self.preference.get("CAT_ip", "")
+            )
+        )
+        self.so2r_otrsp_tcp_port.setValue(
+            int(self.preference.get("so2r_otrsp_tcp_port", 12060))
+        )
+        self.so2r_wk_key_outputs.setChecked(
+            bool(self.preference.get("so2r_wk_key_outputs", True))
+        )
+        self.so2r_dueling_gap.setValue(
+            int(self.preference.get("so2r_dueling_gap_ms", 200))
+        )
+
+    def save_so2r_tab(self):
+        """Store the SO2R tab in preferences."""
+        if self.usewkserial_radioButton.isChecked():
+            self.preference["cwtype"] = 4
+        self.preference["wk_serial_port"] = self.wk_serial_port.currentText().strip()
+        self.preference["wk_ptt"] = self.wk_ptt.isChecked()
+        self.preference["wk_sidetone"] = self.wk_sidetone.isChecked()
+        self.preference["wk_ptt_lead_ms"] = self.wk_ptt_lead.value()
+        self.preference["wk_ptt_tail_ms"] = self.wk_ptt_tail.value()
+        self.preference["wk_swap_outputs"] = self.wk_swap_outputs.isChecked()
+        self.preference["so2r_enabled"] = self.so2r_enabled.isChecked()
+        self.preference["so2r_radio2_interface"] = (
+            self.so2r_radio2_interface.currentText()
+        )
+        self.preference["so2r_radio2_ip"] = self.so2r_radio2_ip.text().strip()
+        try:
+            self.preference["so2r_radio2_port"] = int(self.so2r_radio2_port.text())
+        except ValueError:
+            self.preference["so2r_radio2_port"] = 4533
+        self.preference["so2r_otrsp"] = self.so2r_otrsp.isChecked()
+        self.preference["so2r_otrsp_port"] = (
+            self.so2r_otrsp_port.currentText().strip()
+        )
+        self.preference["so2r_otrsp_transport"] = self.so2r_otrsp_transport.currentData()
+        self.preference["so2r_otrsp_host"] = self.so2r_otrsp_host.text().strip()
+        self.preference["so2r_otrsp_tcp_port"] = self.so2r_otrsp_tcp_port.value()
+        self.preference["so2r_wk_key_outputs"] = self.so2r_wk_key_outputs.isChecked()
+        self.preference["so2r_dueling_gap_ms"] = self.so2r_dueling_gap.value()
 
     def set_cwdaemon_port_hint(self):
         """Sets placeholder hint for the CW interface."""
@@ -342,6 +526,7 @@ class Settings(QtWidgets.QDialog):
             self.preference["cwtype"] = 2
         elif self.usecwviacat_radioButton.isChecked():
             self.preference["cwtype"] = 3
+        self.save_so2r_tab()
         cwsentrst_button = self.cwsentrst_group.checkedButton()
         self.preference["cwsentrst"] = (
             cwsentrst_button.text() if cwsentrst_button else "5NN"

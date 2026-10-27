@@ -8,6 +8,8 @@ import logging
 import socket
 from xmlrpc.client import Error, ServerProxy
 
+from not1mm.lib.winkeyer import WinKeyer, WinKeyerError
+
 if __name__ == "__main__":
     print("I'm not the program you are looking for.")
 
@@ -17,19 +19,38 @@ logger = logging.getLogger("cwinterface")
 class CW:
     """
 
-    An interface to cwdaemon and PyWinkeyerSerial
+    An interface to cwdaemon, PyWinkeyerSerial and a WinKeyer on a serial port
 
-    servertype: int 1=cwdaemon, 2=pywinkeyer, 3=rigctld
+    servertype: int 1=cwdaemon, 2=pywinkeyer, 3=rigctld, 4=WinKeyer serial
 
+    For servertype 4 host is the serial device and port is ignored.
     """
 
-    def __init__(self, servertype: int, host: str, port: int) -> None:
+    def __init__(
+        self,
+        servertype: int,
+        host: str,
+        port: int,
+        on_status=None,
+        on_speed_pot=None,
+    ) -> None:
         self.servertype = servertype
         self.cat = None
         self.host = host
         self.port = port
         self.speed = 20
         self.winkeyer_functions = []
+        self.winkeyer = None
+        self.error = ""
+        if self.servertype == 4:
+            keyer = WinKeyer(host, on_status=on_status, on_speed_pot=on_speed_pot)
+            try:
+                keyer.open()
+                self.winkeyer = keyer
+            except WinKeyerError as err:
+                self.error = str(err)
+                logger.critical(self.error)
+            return
         if self.servertype == 2:
             if not self.__check_sane_ip(self.host):
                 logger.critical(f"Bad IP: {self.host}")
@@ -64,7 +85,10 @@ class CW:
         """sends cw to k1el"""
         logger.debug(f"{texttosend=} {self.servertype=}")
         if texttosend:
-            if self.servertype == 2:
+            if self.servertype == 4:
+                if self.winkeyer:
+                    self.winkeyer.send(texttosend)
+            elif self.servertype == 2:
                 self._sendcw_xmlrpc(texttosend)
             elif self.servertype == 1:
                 self._sendcw_udp(texttosend)
@@ -113,8 +137,35 @@ class CW:
     def _sendcwcat(self, texttosend):
         """..."""
 
+    def configure_winkeyer(self, **settings) -> None:
+        """Send session settings to a serial WinKeyer (see WinKeyer.configure)."""
+        if self.winkeyer:
+            self.winkeyer.configure(speed=self.speed, **settings)
+
+    def select_key_output(self, radio: int) -> None:
+        """Key radio 1 or 2 from a serial WinKeyer's two key outputs."""
+        if self.winkeyer:
+            self.winkeyer.select_radio(radio)
+
+    @property
+    def busy(self):
+        """True/False when the keyer reports its state, None when unknown."""
+        if self.winkeyer:
+            return self.winkeyer.busy
+        return None
+
+    def close(self) -> None:
+        """Release a serial WinKeyer. Network keyers hold nothing open."""
+        if self.winkeyer:
+            self.winkeyer.close()
+            self.winkeyer = None
+
     def set_winkeyer_speed(self, speed):
         """doc"""
+        if self.servertype == 4:
+            if self.winkeyer:
+                self.winkeyer.set_speed(speed)
+            return
         if not self.__check_sane_ip(self.host):
             logger.critical(f"Bad IP: {self.host}")
             return
@@ -133,6 +184,10 @@ class CW:
 
     def winkeyer_stop(self):
         """doc"""
+        if self.servertype == 4:
+            if self.winkeyer:
+                self.winkeyer.clear_buffer()
+            return
         if not self.__check_sane_ip(self.host):
             logger.critical(f"Bad IP: {self.host}")
             return
